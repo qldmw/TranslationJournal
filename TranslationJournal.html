@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>Vue.js Dictionary App</title>
+  <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+  <style>
+    .loading {
+      cursor: wait;
+    }
+
+    .results {
+      display: flex;
+      flex-wrap: wrap;
+    }
+
+    .result {
+      flex: 0 0 calc(100% - 20px);
+      max-width: 100%;
+      margin: 5px;
+      border: 1px solid #ccc;
+      padding: 5px;
+      font-size: 14px;
+    }
+
+    .result.lite {
+      flex: 0 0 calc(100% - 20px);
+      max-width: 100%;
+      margin: 1px;
+      border: 1px solid #ccc;
+      padding: 1px;
+      font-size: 13px;
+    }
+
+    .part {
+      font-weight: bold;
+      /* 加粗 */
+      color: #ff0000;
+      /* 设置文字颜色为红色 */
+      background-color: #f8f8f8;
+      /* 设置背景色为浅灰色 */
+    }
+
+    .result ul {
+      margin: 5px 0;
+      padding-left: 20px;
+    }
+
+    summary:hover {
+      cursor: pointer;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="app">
+    <div>
+      <input v-model="searchText" @keyup.enter="search" type="text" placeholder="输入要查找的词">
+      <button :class="{ loading: loading }" @click="search" :disabled="loading">{{ loading ? '搜索中...' : '搜索' }}</button>
+      <button @click="clearResults">清空记录</button>
+      <button @click="toggleLiteMode">切换精简模式</button>
+      <button @click="toggleDefaultExpanded">切换默认展开</button>
+    </div>
+    <div v-if="searchResults.length > 0" class="results">
+      <div v-for="(result, index) in searchResults" :key="result.time" class="result" :class="{ lite: isLiteMode }">
+        <strong>{{ result.word }}</strong> - {{ result.phonetic }} <span v-if="result.count > 1">（搜索{{ result.count
+          }}次）</span>
+        <ul v-if="Object.keys(result.meaning).length > 0">
+          <li v-if="!isLiteMode" v-for="(meanings, part) in result.meaning" :key="part">
+            <span class="part">{{ part }}</span> - <span v-for="(meaning, index) in meanings" :key="index">{{ meaning.en
+              }} - {{ meaning.cn }}&nbsp;</span>
+          </li>
+          <li v-if="isLiteMode" v-for="(meanings, part) in result.meaning" :key="part">
+            <span class="part">{{ part }}</span> - <span v-for="(meaning, index) in meanings" :key="index">{{ meaning.cn
+              }}&nbsp;</b></span>
+          </li>
+        </ul>
+        <details v-if="!isLiteMode && result.examples.length > 0" v-bind:open="isDefaultExpanded">
+          <summary>展开例句</summary>
+          <ul>
+            <li v-for="(example, index) in result.examples" :key="index">{{ example }}</li>
+          </ul>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    //需要开启不安全模式的chrome以忽略CORS策略，Win + R执行：chrome.exe --disable-web-security --user-data-dir="C:\path\to\temp\directory"
+    new Vue({
+      el: '#app',
+      data: {
+        searchText: '',
+        searchResults: JSON.parse(localStorage.getItem('searchResults') || '[]'),
+        loading: false,
+        isDefaultExpanded: false,
+        isLiteMode: false
+      },
+      methods: {
+        async search() {
+          if (this.searchText.trim() === '') return;
+
+          this.loading = true;
+          const existingResultIndex = this.searchResults.findIndex(
+            (result) => result.word.toLowerCase() === this.searchText.toLowerCase()
+          );
+
+          if (existingResultIndex !== -1) {
+            this.searchResults[existingResultIndex].count++;
+            const existingResult = this.searchResults.splice(existingResultIndex, 1)[0];
+            this.searchResults.unshift(existingResult);
+          } else {
+            const result = await this.fetchDataFromCambridge(this.searchText);
+
+            if (result) {
+              const currentTime = new Date().toLocaleString();
+              this.searchResults.unshift({
+                time: currentTime,
+                word: result.word,
+                phonetic: result.phonetic,
+                meaning: result.meaning,
+                examples: result.examples,
+                count: 1
+              });
+            }
+          }
+
+          localStorage.setItem('searchResults', JSON.stringify(this.searchResults));
+          this.loading = false;
+          this.searchText = '';
+        },
+        clearResults() {
+          this.searchResults = [];
+          localStorage.removeItem('searchResults');
+        },
+        toggleDefaultExpanded() {
+          this.isDefaultExpanded = !this.isDefaultExpanded;
+        },
+        toggleLiteMode() {
+          this.isLiteMode = !this.isLiteMode;
+        },
+        async fetchDataFromCambridge(word) {
+          try {
+            const response = await fetch(`https://dictionary.cambridge.org/zhs/%E8%AF%8D%E5%85%B8/%E8%8B%B1%E8%AF%AD-%E6%B1%89%E8%AF%AD-%E7%AE%80%E4%BD%93/${word}`);
+            const html = await response.text();
+            const tempElement = document.createElement('div');
+            tempElement.innerHTML = html;
+
+            if (!tempElement.querySelector(".di-title")) {
+              return null;
+            }
+
+            const phonetic = tempElement.querySelector(".pos-header .us.dpron-i .pron.dpron").textContent.trim();
+            const meaning = {};
+            const examples = [];
+
+            tempElement.querySelectorAll(".entry-body__el").forEach((el) => {
+              const part = el.querySelector(".pos-header > .posgram > .pos").textContent.trim();
+              meaning[part] = [];
+
+              el.querySelectorAll(".sense-body .def-block").forEach((defBlock) => {
+                const en = defBlock.querySelector(".ddef_h .def.ddef_d").textContent.trim();
+                const cn = defBlock.querySelector(".def-body > .trans.dtrans").textContent.trim();
+                meaning[part].push({ en, cn });
+              });
+            });
+
+            tempElement.querySelectorAll("#dataset-example .lbb.lb-cm").forEach((example) => {
+              examples.push(example.querySelector(".deg").textContent.trim().replace("\n", ""));
+            });
+
+            return {
+              word,
+              phonetic,
+              meaning,
+              examples,
+            };
+          } catch (error) {
+            console.error(error);
+            return null;
+          }
+        }
+      }
+    });
+  </script>
+</body>
+
+</html>
