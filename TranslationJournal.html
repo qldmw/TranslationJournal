@@ -1,3 +1,4 @@
+//需要开启不安全模式的chrome以忽略CORS策略，Win + R执行：chrome.exe --disable-web-security --user-data-dir="C:\path\to\temp\directory"
 <!DOCTYPE html>
 <html>
 
@@ -49,6 +50,34 @@
     summary:hover {
       cursor: pointer;
     }
+
+    .play-button {
+      width: 20px;
+      height: 20px;
+      background-color: #000;
+      border: none;
+      border-radius: 50%;
+      position: relative;
+      bottom: 5px;
+      cursor: pointer;
+    }
+
+    .play-icon {
+      width: 0;
+      height: 0;
+      border-top: 7px solid transparent;
+      border-bottom: 7px solid transparent;
+      border-left: 11px solid #fff;
+    }
+
+    .play-icon,
+    .play-icon::before {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 56%;
+      transform: translate(-50%, -50%);
+    }
   </style>
 </head>
 
@@ -62,9 +91,13 @@
       <button @click="toggleDefaultExpanded">切换默认展开</button>
     </div>
     <div v-if="searchResults.length > 0" class="results">
+      <audio ref="audioPlayer" :src="currentAudioSrc" @loadeddata="onAudioLoaded"></audio>
       <div v-for="(result, index) in searchResults" :key="result.time" class="result" :class="{ lite: isLiteMode }">
-        <strong>{{ result.word }}</strong> - {{ result.phonetic }} <span v-if="result.count > 1">（搜索{{ result.count
-          }}次）</span>
+        <strong>{{ result.word }}</strong> - {{ result.phonetic }}
+        <button class="play-button" @click="playAudio(result.audioSrc)">
+          <span class="play-icon"></span>
+        </button>
+        <span v-if="result.count > 1">（搜索{{ result.count }}次）</span>
         <ul v-if="Object.keys(result.meaning).length > 0">
           <li v-if="!isLiteMode" v-for="(meanings, part) in result.meaning" :key="part">
             <span class="part">{{ part }}</span> - <span v-for="(meaning, index) in meanings" :key="index">{{ meaning.en
@@ -86,15 +119,20 @@
   </div>
 
   <script>
-    //需要开启不安全模式的chrome以忽略CORS策略，Win + R执行：chrome.exe --disable-web-security --user-data-dir="C:\path\to\temp\directory"
     new Vue({
       el: '#app',
       data: {
         searchText: '',
+        currentAudioSrc: '',
         searchResults: JSON.parse(localStorage.getItem('searchResults') || '[]'),
         loading: false,
         isDefaultExpanded: false,
-        isLiteMode: false
+        isLiteMode: false,
+        audioPlayer: null,
+      },
+      mounted() {
+        // 在mounted钩子中访问绑定在ref="audioPlayer"上的Audio元素
+        this.audioPlayer = this.$refs.audioPlayer;
       },
       methods: {
         async search() {
@@ -109,6 +147,8 @@
             this.searchResults[existingResultIndex].count++;
             const existingResult = this.searchResults.splice(existingResultIndex, 1)[0];
             this.searchResults.unshift(existingResult);
+            //search之后预先加载音频，缩短load时间
+            this.currentAudioSrc = existingResult.audioSrc;
           } else {
             const result = await this.fetchDataFromCambridge(this.searchText);
 
@@ -120,8 +160,11 @@
                 phonetic: result.phonetic,
                 meaning: result.meaning,
                 examples: result.examples,
+                audioSrc: result.audioSrc,
                 count: 1
               });
+              //search之后预先加载音频，缩短load时间
+              this.currentAudioSrc = result.audioSrc;
             }
           }
 
@@ -139,6 +182,19 @@
         toggleLiteMode() {
           this.isLiteMode = !this.isLiteMode;
         },
+        playAudio(audioSrc) {
+          if (audioSrc !== this.currentAudioSrc) {
+            this.currentAudioSrc = audioSrc;
+          }
+          // 如果音频已经加载完成，直接调用.play()方法播放音频
+          if (this.audioPlayer.readyState >= 2) {
+            this.audioPlayer.play();
+          }
+        },
+        onAudioLoaded() {
+          // 音频加载完成后，自动播放
+          this.audioPlayer.play();
+        },
         async fetchDataFromCambridge(word) {
           try {
             const response = await fetch(`https://dictionary.cambridge.org/zhs/%E8%AF%8D%E5%85%B8/%E8%8B%B1%E8%AF%AD-%E6%B1%89%E8%AF%AD-%E7%AE%80%E4%BD%93/${word}`);
@@ -153,6 +209,7 @@
             const phonetic = tempElement.querySelector(".pos-header .us.dpron-i .pron.dpron").textContent.trim();
             const meaning = {};
             const examples = [];
+            const audioSrc = "https://dictionary.cambridge.org" + tempElement.querySelector('.pos-header .us.dpron-i span.daud source[type="audio/mpeg"]').getAttribute('src');
 
             tempElement.querySelectorAll(".entry-body__el").forEach((el) => {
               const part = el.querySelector(".pos-header > .posgram > .pos").textContent.trim();
@@ -174,6 +231,7 @@
               phonetic,
               meaning,
               examples,
+              audioSrc
             };
           } catch (error) {
             console.error(error);
